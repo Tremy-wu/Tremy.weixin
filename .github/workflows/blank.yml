@@ -1,0 +1,123 @@
+import base64
+import sys
+import threading
+from io import BytesIO
+
+from pynput.mouse import Listener as MouseListener
+from pynput.keyboard import Listener as KeyboardListener, Controller, Key
+import os
+import subprocess
+import winreg
+import tkinter as tk
+from tkinter import messagebox
+import time
+from pystray import Icon, MenuItem, Menu
+from PIL import Image, ImageDraw
+import logging
+
+# 配置日志记录
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+class WeChatAutoLock:
+    def __init__(self):
+        # 设置无操作的时间阈值（3分钟）
+        self.TIME_LIMIT = 3 * 60  # 单位为秒
+        # 用来记录最后的活动时间
+        self.last_activity_time = time.time()
+        self.run_status = True
+        # 创建键盘控制器
+        self.keyboard_controller = Controller()
+
+    def on_move(self, x, y):
+        self.run_status = True
+        self.last_activity_time = time.time()  # 鼠标移动时更新活动时间
+        logging.info(f"Mouse moved at {self.last_activity_time}")
+
+    def on_click(self, x, y, button, pressed):
+        self.run_status = True
+        self.last_activity_time = time.time()  # 鼠标点击时更新活动时间
+        logging.info(f"Mouse clicked at {self.last_activity_time}")
+
+    def on_scroll(self, x, y, dx, dy):
+        self.run_status = True
+        self.last_activity_time = time.time()  # 鼠标滚动时更新活动时间
+        logging.info(f"Mouse scrolled at {self.last_activity_time}")
+
+    def on_press(self, key):
+        self.run_status = True
+        self.last_activity_time = time.time()  # 键盘按键时更新活动时间
+        logging.info(f"Key pressed at {self.last_activity_time}")
+
+    def get_wechat_install_path_from_registry(self):
+        # 获取微信安装路径
+        try:
+            # 打开注册表项
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Tencent\WeChat")
+            # 获取 "InstallPath" 值
+            install_path, _ = winreg.QueryValueEx(key, "InstallPath")
+            winreg.CloseKey(key)
+            wechat_path = os.path.join(install_path, "WeChat.exe")
+            return wechat_path
+        except FileNotFoundError:
+            logging.error("未找到微信安装路径")
+            return None
+
+    def check_inactivity(self):
+        while True:
+            time.sleep(1)  # 每秒检查一次
+            current_time = time.time()
+            # 如果当前时间减去最后活动时间大于设置的时间阈值，则执行任务
+            if current_time - self.last_activity_time > self.TIME_LIMIT:
+                logging.info(f"超过{self.TIME_LIMIT / 60}分钟没有操作...")
+                wechat_path = self.get_wechat_install_path_from_registry()
+                if wechat_path:
+                    try:
+                        subprocess.Popen(wechat_path)
+                        # 模拟按下 Ctrl + L
+                        with self.keyboard_controller.pressed(Key.ctrl):
+                            self.keyboard_controller.press('l')
+                            self.keyboard_controller.release('l')
+                    except Exception as e:
+                        logging.error(f"打开微信时出错: {e}")
+                self.run_status = False
+                break
+
+    def on_quit(self, icon, item):
+        icon.stop()  # 停止图标显示
+        sys.exit()  # 退出程序
+
+    def set_tray(self):
+        # 设置托盘图标
+        menu = Menu(MenuItem('退出', self.on_quit))
+        base64_encoded_icon = "..."  # 这里是很长的base64编码的图标数据
+        image_data = base64.b64decode(base64_encoded_icon)
+        image = Image.open(BytesIO(image_data))
+        icon = Icon("MyTrayIcon", image, "微信自动锁定", menu=menu)
+        icon.run()
+
+    def main_program(self):
+        self.run_status = True
+        while True:
+            if self.run_status:
+                # 开始检测无操作
+                self.check_inactivity()
+
+    def run(self):
+        # 启动鼠标监听器
+        mouse_listener = MouseListener(on_move=self.on_move, on_click=self.on_click, on_scroll=self.on_scroll)
+        mouse_listener.start()
+
+        # 启动键盘监听器
+        keyboard_listener = KeyboardListener(on_press=self.on_press)
+        keyboard_listener.start()
+
+        # 开个线程 执行主程序逻辑
+        main_thread = threading.Thread(target=self.main_program, daemon=True)
+        main_thread.start()
+
+        # 设置托盘图标
+        self.set_tray()
+
+if __name__ == "__main__":
+    wechat_auto_lock = WeChatAutoLock()
+    wechat_auto_lock.run()
